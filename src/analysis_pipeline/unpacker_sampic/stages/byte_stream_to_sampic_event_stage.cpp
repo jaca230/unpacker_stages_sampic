@@ -1,9 +1,7 @@
 #include "analysis_pipeline/unpacker_sampic/stages/byte_stream_to_sampic_event_stage.h"
 
 #include "analysis_pipeline/unpacker_sampic/data_products/SampicEvent.h"
-#include "analysis_pipeline/unpacker_sampic/data_products/SampicEventHeader.h"
-#include "analysis_pipeline/unpacker_sampic/data_products/SampicPacket.h"
-#include "analysis_pipeline/unpacker_sampic/data_products/SampicEventFooter.h"
+#include "analysis_pipeline/unpacker_sampic/data_products/SampicHit.h"
 
 #include "analysis_pipeline/unpacker_core/data_products/ByteStream.h"
 #include "analysis_pipeline/core/data/pipeline_data_product.h"
@@ -41,74 +39,95 @@ void ByteStreamToSampicEventStage::Process() {
     const uint8_t* ptr = byte_stream->data;
     size_t remaining = byte_stream->size;
 
-    // Check space for header
-    if (remaining < sizeof(dataProducts::SampicEventHeader)) {
-        spdlog::error("[{}] Insufficient bytes for header (need {}, got {})",
-                      Name(), sizeof(dataProducts::SampicEventHeader), remaining);
-        return;
-    }
+    // Create output event
+    auto event = std::make_unique<dataProducts::SampicEvent>();
 
-    // --- Parse Header ---
-    dataProducts::SampicEventHeader header;
-    std::memcpy(&header, ptr, sizeof(header));
-    ptr += sizeof(header);
-    remaining -= sizeof(header);
+    // Parse all hits from the AD bank
+    // Each hit consists of: Header + CorrectedDataSamples + Scalars
+    size_t hit_count = 0;
 
-    if (header.packet_size != sizeof(dataProducts::SampicPacket)) {
-        spdlog::error("[{}] Packet size mismatch: header.packet_size={} != sizeof(SampicPacket)={}",
-                      Name(), header.packet_size, sizeof(dataProducts::SampicPacket));
-        return;
-    }
-
-    const size_t expected_size =
-        sizeof(dataProducts::SampicEventHeader) +
-        header.num_packets * sizeof(dataProducts::SampicPacket) +
-        sizeof(dataProducts::SampicEventFooter);
-
-    if (expected_size != byte_stream->size) {
-        spdlog::error("[{}] ByteStream size mismatch:\n"
-                      "  Header says: num_packets={}, packet_size={}\n"
-                      "  Expected size: {}\n"
-                      "  Actual ByteStream size: {}\n",
-                      Name(), header.num_packets, header.packet_size,
-                      expected_size, byte_stream->size);
-        return;
-    }
-
-    // --- Parse Packets ---
-    dataProducts::SampicPacketCollection packet_collection;
-    for (uint16_t i = 0; i < header.num_packets; ++i) {
-        if (remaining < sizeof(dataProducts::SampicPacket)) {
-            spdlog::error("[{}] Truncated while reading packet {}/{}", Name(), i + 1, header.num_packets);
-            return;
+    while (remaining > 0) {
+        // Check if we have enough for header
+        if (remaining < sizeof(dataProducts::SampicHitHeader)) {
+            if (remaining > 0) {
+                spdlog::warn("[{}] {} bytes remaining, not enough for another hit header",
+                            Name(), remaining);
+            }
+            break;
         }
 
-        dataProducts::SampicPacket pkt;
-        std::memcpy(&pkt, ptr, sizeof(pkt));
-        ptr += sizeof(pkt);
-        remaining -= sizeof(pkt);
-        packet_collection.AddPacket(std::move(pkt));
+        // Parse header
+        dataProducts::SampicHitHeader header;
+        std::memcpy(&header, ptr, sizeof(header));
+        ptr += sizeof(header);
+        remaining -= sizeof(header);
+
+        // Validate data_size
+        if (header.data_size < 0 || header.data_size > dataProducts::MAX_SAMPIC_SAMPLES) {
+            spdlog::error("[{}] Invalid data_size={} in hit {}", Name(), header.data_size, hit_count);
+            break;
+        }
+
+        // Calculate waveform data size
+        const size_t waveform_bytes = header.data_size * sizeof(float);
+
+        // Check if we have enough for waveform
+        if (remaining < waveform_bytes) {
+            spdlog::error("[{}] Not enough bytes for waveform (need {}, got {})",
+                        Name(), waveform_bytes, remaining);
+            break;
+        }
+
+        // Parse waveform
+        std::vector<float> waveform(header.data_size);
+        std::memcpy(waveform.data(), ptr, waveform_bytes);
+        ptr += waveform_bytes;
+        remaining -= waveform_bytes;
+
+        // Check if we have enough for scalars
+        if (remaining < sizeof(dataProducts::SampicHitScalars)) {
+            spdlog::error("[{}] Not enough bytes for scalars (need {}, got {})",
+                        Name(), sizeof(dataProducts::SampicHitScalars), remaining);
+            break;
+        }
+
+        // Parse scalars
+        dataProducts::SampicHitScalars scalars;
+        std::memcpy(&scalars, ptr, sizeof(scalars));
+        ptr += sizeof(scalars);
+        remaining -= sizeof(scalars);
+
+        // Build SampicHitData
+        dataProducts::SampicHitData hit_data;
+        hit_data.fe_board_index = header.fe_board_index;
+        hit_data.channel = header.channel;
+        hit_data.hit_number = header.hit_number;
+        hit_data.sampic_index = header.sampic_index;
+        hit_data.channel_index = header.channel_index;
+        hit_data.inl_corrected = (header.inl_corrected != 0);
+        hit_data.adc_corrected = (header.adc_corrected != 0);
+        hit_data.residual_pedestal_corrected = (header.residual_pedestal_corrected != 0);
+        hit_data.cell_info = header.cell_info;
+        hit_data.first_cell_physical_index = header.first_cell_physical_index;
+        hit_data.corrected_waveform = std::move(waveform);
+        hit_data.raw_tot_value = scalars.raw_tot_value;
+        hit_data.tot_value = scalars.tot_value;
+        hit_data.amplitude = scalars.amplitude;
+        hit_data.baseline = scalars.baseline;
+        hit_data.peak = scalars.peak;
+        hit_data.time_index = scalars.time_index;
+        hit_data.time_instant = scalars.time_instant;
+        hit_data.time_amplitude = scalars.time_amplitude;
+        hit_data.first_cell_timestamp = scalars.first_cell_timestamp;
+
+        event->hits.push_back(std::move(hit_data));
+        ++hit_count;
     }
 
-    // --- Parse Footer ---
-    if (remaining < sizeof(dataProducts::SampicEventFooter)) {
-        spdlog::error("[{}] Not enough bytes for footer (need {}, got {})",
-                      Name(), sizeof(dataProducts::SampicEventFooter), remaining);
-        return;
-    }
+    spdlog::debug("[{}] Parsed {} hits from AD bank ({} bytes total, {} bytes remaining)",
+                Name(), hit_count, byte_stream->size, remaining);
 
-    dataProducts::SampicEventFooter footer;
-    std::memcpy(&footer, ptr, sizeof(footer));
-    ptr += sizeof(footer);
-    remaining -= sizeof(footer);
-
-    // --- Assemble SampicEvent ---
-    auto event = std::make_unique<dataProducts::SampicEvent>();
-    event->header = header;
-    event->packets = std::move(packet_collection);
-    event->footer = footer;
-    event->BuildWaveformsFromPackets();
-
+    // Create data product
     auto product = std::make_unique<PipelineDataProduct>();
     product->setName(output_product_name_);
     product->setObject(std::move(event));
@@ -116,7 +135,5 @@ void ByteStreamToSampicEventStage::Process() {
     product->addTag("built_by_byte_stream_to_sampic_event_stage");
 
     getDataProductManager()->addOrUpdate(output_product_name_, std::move(product));
-
-    spdlog::debug("[{}] Parsed SampicEvent from full ByteStream ({} bytes total)", Name(), byte_stream->size);
 }
 
