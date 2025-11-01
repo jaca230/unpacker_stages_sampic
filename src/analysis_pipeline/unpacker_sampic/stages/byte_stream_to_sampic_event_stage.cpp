@@ -68,8 +68,9 @@ void ByteStreamToSampicEventStage::Process() {
             break;
         }
 
-        // Calculate waveform data size
-        const size_t waveform_bytes = header.data_size * sizeof(float);
+        // IMPORTANT: SAMPIC DAQ always writes full 64-sample waveform array to bank,
+        // regardless of actual data_size. The data_size field tells us how many are valid.
+        constexpr size_t waveform_bytes = dataProducts::MAX_SAMPIC_SAMPLES * sizeof(float);
 
         // Check if we have enough for waveform
         if (remaining < waveform_bytes) {
@@ -78,9 +79,13 @@ void ByteStreamToSampicEventStage::Process() {
             break;
         }
 
-        // Parse waveform
-        std::vector<float> waveform(header.data_size);
+        // Parse full waveform array (all 64 samples)
+        std::vector<float> waveform(dataProducts::MAX_SAMPIC_SAMPLES);
         std::memcpy(waveform.data(), ptr, waveform_bytes);
+
+        // Resize to actual valid data size
+        waveform.resize(header.data_size);
+
         ptr += waveform_bytes;
         remaining -= waveform_bytes;
 
