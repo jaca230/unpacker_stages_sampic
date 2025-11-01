@@ -5,7 +5,5 @@
 #pragma link off all functions;
 
 #pragma link C++ class ByteStreamToSampicEventStage+;
-#pragma link C++ class ByteStreamToSampicTimeStage+;
-
 
 #endif

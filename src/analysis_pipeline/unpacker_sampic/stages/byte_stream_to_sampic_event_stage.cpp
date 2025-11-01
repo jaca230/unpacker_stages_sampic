@@ -86,8 +86,9 @@ void ByteStreamToSampicEventStage::Process() {
 
         // Check if we have enough for scalars
         if (remaining < sizeof(dataProducts::SampicHitScalars)) {
-            spdlog::error("[{}] Not enough bytes for scalars (need {}, got {})",
-                        Name(), sizeof(dataProducts::SampicHitScalars), remaining);
+            spdlog::error("[{}] Not enough bytes for scalars (need {}, got {}) - hit {} channel {} data_size {}",
+                        Name(), sizeof(dataProducts::SampicHitScalars), remaining,
+                        hit_count, header.channel, header.data_size);
             break;
         }
 
