@@ -16,13 +16,11 @@ void ByteStreamToSampicCollectorTimingStage::OnInit() {
     ByteStreamProcessorStage::OnInit();
 
     output_product_name_ = parameters_.value("output_product_name", "SampicCollectorTiming");
-    spdlog::debug("[{}] Initialized with output product name '{}'", Name(), output_product_name_);
 }
 
 void ByteStreamToSampicCollectorTimingStage::Process() {
     auto input_lock = getInputByteStreamLock();
     if (!input_lock) {
-        spdlog::debug("[{}] Could not lock ByteStream '{}'", Name(), input_byte_stream_product_name_);
         return;
     }
 
@@ -61,9 +59,6 @@ void ByteStreamToSampicCollectorTimingStage::Process() {
     timing->group_build_us = record.group_build_us;
     timing->finalize_us = record.finalize_us;
     timing->total_us = record.total_us;
-
-    spdlog::debug("[{}] Parsed collector timing: {} events, {} hits, total={} us",
-                Name(), record.n_events, record.total_hits, record.total_us);
 
     // Create data product
     auto product = std::make_unique<PipelineDataProduct>();

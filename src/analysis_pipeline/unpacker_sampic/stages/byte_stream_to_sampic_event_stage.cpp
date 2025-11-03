@@ -18,13 +18,11 @@ void ByteStreamToSampicEventStage::OnInit() {
     ByteStreamProcessorStage::OnInit();
 
     output_product_name_ = parameters_.value("output_product_name", "SampicEvent");
-    spdlog::debug("[{}] Initialized with output product name '{}'", Name(), output_product_name_);
 }
 
 void ByteStreamToSampicEventStage::Process() {
     auto input_lock = getInputByteStreamLock();
     if (!input_lock) {
-        spdlog::debug("[{}] Could not lock ByteStream '{}'", Name(), input_byte_stream_product_name_);
         return;
     }
 
@@ -130,9 +128,6 @@ void ByteStreamToSampicEventStage::Process() {
         ++hit_count;
     }
 
-    spdlog::debug("[{}] Parsed {} hits from AD bank ({} bytes total, {} bytes remaining)",
-                Name(), hit_count, byte_stream->size, remaining);
-
     // Create data product
     auto product = std::make_unique<PipelineDataProduct>();
     product->setName(output_product_name_);
@@ -142,4 +137,3 @@ void ByteStreamToSampicEventStage::Process() {
 
     getDataProductManager()->addOrUpdate(output_product_name_, std::move(product));
 }
-

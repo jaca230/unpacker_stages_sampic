@@ -16,13 +16,11 @@ void ByteStreamToSampicEventTimingStage::OnInit() {
     ByteStreamProcessorStage::OnInit();
 
     output_product_name_ = parameters_.value("output_product_name", "SampicEventTiming");
-    spdlog::debug("[{}] Initialized with output product name '{}'", Name(), output_product_name_);
 }
 
 void ByteStreamToSampicEventTimingStage::Process() {
     auto input_lock = getInputByteStreamLock();
     if (!input_lock) {
-        spdlog::debug("[{}] Could not lock ByteStream '{}'", Name(), input_byte_stream_product_name_);
         return;
     }
 
@@ -67,9 +65,6 @@ void ByteStreamToSampicEventTimingStage::Process() {
     timing->sp_read_us_max = record.sp_read_us_max;
     timing->sp_decode_us_max = record.sp_decode_us_max;
     timing->sp_total_us_max = record.sp_total_us_max;
-
-    spdlog::debug("[{}] Parsed event timing: {} hits, {} parents, total_max={} us",
-                Name(), record.nhits, record.nparents, record.sp_total_us_max);
 
     // Create data product
     auto product = std::make_unique<PipelineDataProduct>();
