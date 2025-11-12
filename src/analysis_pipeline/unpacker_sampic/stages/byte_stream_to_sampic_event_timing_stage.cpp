@@ -66,6 +66,10 @@ void ByteStreamToSampicEventTimingStage::Process() {
     timing->sp_decode_us_max = record.sp_decode_us_max;
     timing->sp_total_us_max = record.sp_total_us_max;
 
+    // Acquisition retry stats
+    timing->sp_acq_retry_max = record.sp_acq_retry_max;
+    timing->sp_acq_retry_sum = record.sp_acq_retry_sum;
+
     // Create data product
     auto product = std::make_unique<PipelineDataProduct>();
     product->setName(output_product_name_);
