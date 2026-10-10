@@ -37,21 +37,29 @@ void ByteStreamToSampicEventStage::Process() {
     const uint8_t* ptr = byte_stream->data;
     size_t remaining = byte_stream->size;
 
+    constexpr size_t hit_record_size = sizeof(dataProducts::SampicHitHeader) +
+        dataProducts::MAX_SAMPIC_SAMPLES * sizeof(float) +
+        sizeof(dataProducts::SampicHitScalars);
+    static_assert(hit_record_size == 344, "Unexpected SD hit record size");
+    if (remaining % hit_record_size != 0) {
+        spdlog::error("[{}] SD bank size {} is not a multiple of the {}-byte hit record",
+                      Name(), remaining, hit_record_size);
+        return;
+    }
+
     // Create output event
     auto event = std::make_unique<dataProducts::SampicEvent>();
 
-    // Parse all hits from the AD bank
+    // Parse all hits from the SD bank
     // Each hit consists of: Header + CorrectedDataSamples + Scalars
     size_t hit_count = 0;
 
     while (remaining > 0) {
         // Check if we have enough for header
         if (remaining < sizeof(dataProducts::SampicHitHeader)) {
-            if (remaining > 0) {
-                spdlog::warn("[{}] {} bytes remaining, not enough for another hit header",
-                            Name(), remaining);
-            }
-            break;
+            spdlog::error("[{}] {} bytes remaining, not enough for another hit header",
+                          Name(), remaining);
+            return;
         }
 
         // Parse header
@@ -63,7 +71,7 @@ void ByteStreamToSampicEventStage::Process() {
         // Validate data_size
         if (header.data_size < 0 || header.data_size > dataProducts::MAX_SAMPIC_SAMPLES) {
             spdlog::error("[{}] Invalid data_size={} in hit {}", Name(), header.data_size, hit_count);
-            break;
+            return;
         }
 
         // IMPORTANT: SAMPIC DAQ always writes full 64-sample waveform array to bank,
@@ -74,7 +82,7 @@ void ByteStreamToSampicEventStage::Process() {
         if (remaining < waveform_bytes) {
             spdlog::error("[{}] Not enough bytes for waveform (need {}, got {})",
                         Name(), waveform_bytes, remaining);
-            break;
+            return;
         }
 
         // Parse full waveform array (all 64 samples)
@@ -92,7 +100,7 @@ void ByteStreamToSampicEventStage::Process() {
             spdlog::error("[{}] Not enough bytes for scalars (need {}, got {}) - hit {} channel {} data_size {}",
                         Name(), sizeof(dataProducts::SampicHitScalars), remaining,
                         hit_count, header.channel, header.data_size);
-            break;
+            return;
         }
 
         // Parse scalars

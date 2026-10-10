@@ -7,5 +7,8 @@
 #pragma link C++ class ByteStreamToSampicEventStage+;
 #pragma link C++ class ByteStreamToSampicEventTimingStage+;
 #pragma link C++ class ByteStreamToSampicCollectorTimingStage+;
+#pragma link C++ class ByteStreamToSampicHitMetadataStage+;
+#pragma link C++ class ByteStreamToSampicTriggerGroupStage+;
+#pragma link C++ class ByteStreamToSampicTriggerRecordsStage+;
 
 #endif
