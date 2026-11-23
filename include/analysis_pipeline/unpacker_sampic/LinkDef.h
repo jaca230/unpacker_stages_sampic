@@ -11,4 +11,8 @@
 #pragma link C++ class ByteStreamToSampicTriggerGroupStage+;
 #pragma link C++ class ByteStreamToSampicTriggerRecordsStage+;
 
+#pragma link C++ class ByteStreamToSampicReadoutTickStage+;
+
+#pragma link C++ class ByteStreamToSampicTimeBinStage+;
+
 #endif

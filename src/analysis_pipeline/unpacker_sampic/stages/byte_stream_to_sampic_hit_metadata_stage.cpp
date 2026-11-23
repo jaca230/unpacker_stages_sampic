@@ -39,7 +39,7 @@ void ByteStreamToSampicHitMetadataStage::Process() {
 
     dataProducts::SampicHitMetadataBankHeader header{};
     std::memcpy(&header, byte_stream->data, sizeof(header));
-    if (header.version != 1 || header.record_size != sizeof(dataProducts::SampicHitMetadataRecord)) {
+    if (header.version != 2 || header.record_size != sizeof(dataProducts::SampicHitMetadataRecord)) {
         spdlog::warn("[{}] Unsupported SH format version/record size {}/{}", Name(),
                      header.version, header.record_size);
         return;
@@ -66,18 +66,11 @@ void ByteStreamToSampicHitMetadataStage::Process() {
         ptr += sizeof(record);
 
         dataProducts::SampicHitMetadataData hit;
-        hit.sampic_data_header = record.sampic_data_header;
-        hit.first_trigger_position_cell = record.first_trigger_position_cell;
-        hit.trigger_position_cell = record.trigger_position_cell;
         hit.physical_cell0_timestamp_ns = record.physical_cell0_timestamp_ns;
         hit.sampic_timestamp_a = record.sampic_timestamp_a;
         hit.sampic_timestamp_b = record.sampic_timestamp_b;
         hit.fpga_timestamp = record.fpga_timestamp;
-        hit.adc_counter_latched_at_end_of_conversion =
-            record.adc_counter_latched_at_end_of_conversion;
-        hit.start_of_adc_ramp = record.start_of_adc_ramp;
         hit.trigger_position_mask = record.trigger_position_mask;
-        hit.time_physical_index = record.time_physical_index;
         metadata->hits.push_back(std::move(hit));
     }
 

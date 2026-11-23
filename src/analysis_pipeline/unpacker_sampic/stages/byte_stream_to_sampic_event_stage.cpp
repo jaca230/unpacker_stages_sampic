@@ -1,147 +1,76 @@
 #include "analysis_pipeline/unpacker_sampic/stages/byte_stream_to_sampic_event_stage.h"
-
 #include "analysis_pipeline/unpacker_sampic/data_products/SampicEvent.h"
-#include "analysis_pipeline/unpacker_sampic/data_products/SampicHit.h"
-
 #include "analysis_pipeline/unpacker_core/data_products/ByteStream.h"
 #include "analysis_pipeline/core/data/pipeline_data_product.h"
-
 #include <spdlog/spdlog.h>
-#include <memory>
 #include <cstring>
+#include <memory>
 
 ClassImp(ByteStreamToSampicEventStage);
-
 ByteStreamToSampicEventStage::ByteStreamToSampicEventStage() = default;
-
 void ByteStreamToSampicEventStage::OnInit() {
     ByteStreamProcessorStage::OnInit();
-
     output_product_name_ = parameters_.value("output_product_name", "SampicEvent");
 }
-
 void ByteStreamToSampicEventStage::Process() {
     auto input_lock = getInputByteStreamLock();
-    if (!input_lock) {
+    if (!input_lock) return;
+    auto bytes = std::dynamic_pointer_cast<dataProducts::ByteStream>(input_lock->getSharedObject());
+    using Header = dataProducts::SampicHitBankHeader;
+    using Record = dataProducts::SampicHitRecord;
+    if (!bytes || !bytes->data || bytes->size < sizeof(Header)) {
+        spdlog::error("[{}] SD bank is shorter than its header", Name());
         return;
     }
-
-    auto base_obj = input_lock->getSharedObject();
-    auto byte_stream = std::dynamic_pointer_cast<dataProducts::ByteStream>(base_obj);
-
-    if (!byte_stream || !byte_stream->data || byte_stream->size == 0) {
-        spdlog::warn("[{}] Invalid or empty ByteStream", Name());
+    Header header{};
+    std::memcpy(&header, bytes->data, sizeof(header));
+    if (std::memcmp(header.magic, "SDC1", 4) != 0 || header.version != 1 ||
+        header.record_size != sizeof(Record)) {
+        spdlog::error("[{}] Unsupported SD magic/version/record size", Name());
         return;
     }
-
-    const uint8_t* ptr = byte_stream->data;
-    size_t remaining = byte_stream->size;
-
-    constexpr size_t hit_record_size = sizeof(dataProducts::SampicHitHeader) +
-        dataProducts::MAX_SAMPIC_SAMPLES * sizeof(float) +
-        sizeof(dataProducts::SampicHitScalars);
-    static_assert(hit_record_size == 344, "Unexpected SD hit record size");
-    if (remaining % hit_record_size != 0) {
-        spdlog::error("[{}] SD bank size {} is not a multiple of the {}-byte hit record",
-                      Name(), remaining, hit_record_size);
+    const size_t payload_size = bytes->size - sizeof(Header);
+    if (payload_size % sizeof(Record) != 0 || payload_size / sizeof(Record) != header.hit_count) {
+        spdlog::error("[{}] SD hit count does not match bank length", Name());
         return;
     }
-
-    // Create output event
     auto event = std::make_unique<dataProducts::SampicEvent>();
-
-    // Parse all hits from the SD bank
-    // Each hit consists of: Header + CorrectedDataSamples + Scalars
-    size_t hit_count = 0;
-
-    while (remaining > 0) {
-        // Check if we have enough for header
-        if (remaining < sizeof(dataProducts::SampicHitHeader)) {
-            spdlog::error("[{}] {} bytes remaining, not enough for another hit header",
-                          Name(), remaining);
+    event->hits.reserve(header.hit_count);
+    for (uint32_t i = 0; i < header.hit_count; ++i) {
+        Record record{};
+        std::memcpy(&record, bytes->data + sizeof(Header) + size_t(i) * sizeof(Record), sizeof(record));
+        if (record.waveform_size > dataProducts::MAX_SAMPIC_SAMPLES) {
+            spdlog::error("[{}] Invalid SD waveform size {}", Name(), record.waveform_size);
             return;
         }
-
-        // Parse header
-        dataProducts::SampicHitHeader header;
-        std::memcpy(&header, ptr, sizeof(header));
-        ptr += sizeof(header);
-        remaining -= sizeof(header);
-
-        // Validate data_size
-        if (header.data_size < 0 || header.data_size > dataProducts::MAX_SAMPIC_SAMPLES) {
-            spdlog::error("[{}] Invalid data_size={} in hit {}", Name(), header.data_size, hit_count);
-            return;
-        }
-
-        // IMPORTANT: SAMPIC DAQ always writes full 64-sample waveform array to bank,
-        // regardless of actual data_size. The data_size field tells us how many are valid.
-        constexpr size_t waveform_bytes = dataProducts::MAX_SAMPIC_SAMPLES * sizeof(float);
-
-        // Check if we have enough for waveform
-        if (remaining < waveform_bytes) {
-            spdlog::error("[{}] Not enough bytes for waveform (need {}, got {})",
-                        Name(), waveform_bytes, remaining);
-            return;
-        }
-
-        // Parse full waveform array (all 64 samples)
-        std::vector<float> waveform(dataProducts::MAX_SAMPIC_SAMPLES);
-        std::memcpy(waveform.data(), ptr, waveform_bytes);
-
-        // Resize to actual valid data size
-        waveform.resize(header.data_size);
-
-        ptr += waveform_bytes;
-        remaining -= waveform_bytes;
-
-        // Check if we have enough for scalars
-        if (remaining < sizeof(dataProducts::SampicHitScalars)) {
-            spdlog::error("[{}] Not enough bytes for scalars (need {}, got {}) - hit {} channel {} data_size {}",
-                        Name(), sizeof(dataProducts::SampicHitScalars), remaining,
-                        hit_count, header.channel, header.data_size);
-            return;
-        }
-
-        // Parse scalars
-        dataProducts::SampicHitScalars scalars;
-        std::memcpy(&scalars, ptr, sizeof(scalars));
-        ptr += sizeof(scalars);
-        remaining -= sizeof(scalars);
-
-        // Build SampicHitData
-        dataProducts::SampicHitData hit_data;
-        hit_data.fe_board_index = header.fe_board_index;
-        hit_data.channel = header.channel;
-        hit_data.hit_number = header.hit_number;
-        hit_data.sampic_index = header.sampic_index;
-        hit_data.channel_index = header.channel_index;
-        hit_data.inl_corrected = (header.inl_corrected != 0);
-        hit_data.adc_corrected = (header.adc_corrected != 0);
-        hit_data.residual_pedestal_corrected = (header.residual_pedestal_corrected != 0);
-        hit_data.cell_info = header.cell_info;
-        hit_data.first_cell_physical_index = header.first_cell_physical_index;
-        hit_data.corrected_waveform = std::move(waveform);
-        hit_data.raw_tot_value = scalars.raw_tot_value;
-        hit_data.tot_value = scalars.tot_value;
-        hit_data.amplitude = scalars.amplitude;
-        hit_data.baseline = scalars.baseline;
-        hit_data.peak = scalars.peak;
-        hit_data.time_index = scalars.time_index;
-        hit_data.time_instant = scalars.time_instant;
-        hit_data.time_amplitude = scalars.time_amplitude;
-        hit_data.first_cell_timestamp = scalars.first_cell_timestamp;
-
-        event->hits.push_back(std::move(hit_data));
-        ++hit_count;
+        dataProducts::SampicHitData hit;
+        hit.fe_board_index = record.fe_board_index;
+        hit.channel = record.channel;
+        hit.hit_number = record.hit_number;
+        hit.sampic_index = record.sampic_index;
+        hit.channel_index = record.channel_index;
+        hit.flags = record.flags;
+        hit.inl_corrected = (record.flags & 1) != 0;
+        hit.adc_corrected = (record.flags & 2) != 0;
+        hit.residual_pedestal_corrected = (record.flags & 4) != 0;
+        hit.waveform_clipped = (record.flags & 8) != 0;
+        hit.waveform_nonfinite = (record.flags & 16) != 0;
+        hit.raw_tot_clipped = (record.flags & 32) != 0;
+        hit.cell_info = record.cell_info;
+        hit.first_cell_physical_index = record.first_cell_physical_index;
+        hit.encoded_waveform.assign(record.waveform, record.waveform + record.waveform_size);
+        hit.corrected_waveform.reserve(record.waveform_size);
+        for (auto sample : hit.encoded_waveform)
+            hit.corrected_waveform.push_back(hit.adc_corrected ? sample / 10000.0f : float(sample));
+        hit.raw_tot_value = record.raw_tot_value;
+        hit.tot_value = record.tot_value;
+        hit.first_cell_timestamp = record.first_cell_timestamp;
+        event->hits.push_back(std::move(hit));
     }
-
-    // Create data product
     auto product = std::make_unique<PipelineDataProduct>();
     product->setName(output_product_name_);
     product->setObject(std::move(event));
     product->addTag("sampic_event");
     product->addTag("built_by_byte_stream_to_sampic_event_stage");
-
     getDataProductManager()->addOrUpdate(output_product_name_, std::move(product));
 }
