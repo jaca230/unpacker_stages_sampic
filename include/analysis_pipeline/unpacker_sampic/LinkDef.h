@@ -15,4 +15,7 @@
 
 #pragma link C++ class ByteStreamToSampicTimeBinStage+;
 
+#pragma link C++ class ByteStreamToSampicBuilderEventStage+;
+#pragma link C++ class ByteStreamsToSampicBuilderDiagnosticsStage+;
+
 #endif
